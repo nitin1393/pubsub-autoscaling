@@ -1,0 +1,50 @@
+# Headroom: low-priority "pause" pods hold spare capacity on the worker NodePool.
+# When KEDA adds real workers, they evict these instantly (no 60-90s node wait);
+# the evicted placeholders go Pending and Auto Mode adds a node in the background.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: overprovisioning
+value: -10
+globalDefault: false
+preemptionPolicy: Never
+description: "Placeholder pods that real workloads can preempt"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: pubsub-worker
+value: 1000
+globalDefault: false
+description: "Queue workers"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: overprovisioning
+  namespace: my-app
+spec:
+  replicas: 2                                  # = headroom for ~2 nodes' worth of pods; tune
+  selector:
+    matchLabels:
+      app: overprovisioning
+  template:
+    metadata:
+      labels:
+        app: overprovisioning
+    spec:
+      priorityClassName: overprovisioning
+      terminationGracePeriodSeconds: 0
+      nodeSelector:
+        workload: pubsub-worker
+      tolerations:
+        - key: workload
+          value: pubsub-worker
+          effect: NoSchedule
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: "2"                         # each placeholder reserves this much
+              memory: 4Gi

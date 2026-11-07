@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-worker
+  namespace: my-app
+spec:
+  # no "replicas:" field - KEDA/HPA owns it (avoids GitOps fights)
+  selector:
+    matchLabels:
+      app: my-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: my-worker
+    spec:
+      priorityClassName: pubsub-worker
+      terminationGracePeriodSeconds: 90        # > your longest message processing time
+      nodeSelector:
+        workload: pubsub-worker
+      tolerations:
+        - key: workload
+          value: pubsub-worker
+          effect: NoSchedule
+      topologySpreadConstraints:               # spread across AZs and nodes
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: my-worker
+        - maxSkew: 2
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: my-worker
+      containers:
+        - name: worker
+          image: <YOUR_IMAGE>
+          env:
+            - name: PUBSUB_MAX_OUTSTANDING_MESSAGES   # flow control: match KEDA "value"
+              value: "20"
+          resources:
+            requests:                          # REQUIRED - Auto Mode sizes nodes from this
+              cpu: "500m"
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          lifecycle:
+            preStop:
+              exec:
+                # give the app time to stop pulling and finish in-flight messages
+                command: ["sh", "-c", "sleep 10"]
+          readinessProbe:
+            httpGet: { path: /ready, port: 8080 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-worker
+  namespace: my-app
+spec:
+  maxUnavailable: 20%                          # limits node-consolidation evictions
+  selector:
+    matchLabels:
+      app: my-worker

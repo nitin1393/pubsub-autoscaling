@@ -1,0 +1,31 @@
+# VPA right-sizes worker pods. Safe alongside KEDA/HPA because KEDA scales on
+# queue metrics, not CPU/memory. Requires the VPA components installed in the
+# cluster (kubernetes/autoscaler project, not an EKS add-on).
+#
+# Rollout: start with updateMode "Off" for ~1 week and read recommendations:
+#   kubectl describe vpa my-worker -n my-app
+# Then switch to "Initial" (or "InPlaceOrRecreate" on Kubernetes 1.35+).
+# Never use "Recreate" or "Auto" here: they evict pods during traffic spikes.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: my-worker
+  namespace: my-app
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: my-worker
+  updatePolicy:
+    updateMode: "Off"            # -> "Initial" after review
+  resourcePolicy:
+    containerPolicies:
+      - containerName: worker
+        controlledResources: ["cpu", "memory"]
+        controlledValues: RequestsOnly
+        minAllowed:
+          cpu: 250m
+          memory: 256Mi
+        maxAllowed:
+          cpu: "2"
+          memory: 4Gi

@@ -1,0 +1,21 @@
+# groundcover API key used by KEDA to query groundcover's Prometheus API.
+# Create the key in groundcover: Settings -> API Keys.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: groundcover-api-key
+  namespace: my-app
+type: Opaque
+stringData:
+  bearerToken: "<YOUR_GROUNDCOVER_API_KEY>"
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: groundcover-auth
+  namespace: my-app
+spec:
+  secretTargetRef:
+    - parameter: bearerToken
+      name: groundcover-api-key
+      key: bearerToken

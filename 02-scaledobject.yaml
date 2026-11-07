@@ -1,0 +1,70 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-scaler
+  namespace: my-app
+spec:
+  scaleTargetRef:
+    name: my-worker
+  minReplicaCount: 2            # never 0 in prod: no cold start, survives 1 node loss
+  maxReplicaCount: 100
+  pollingInterval: 15           # seconds between metric checks
+  cooldownPeriod: 300           # only used for scale-to-zero (ignored while min > 0)
+
+  # groundcover is the only metric source, so this matters:
+  # if queries fail 3 times in a row (API down, bad key), hold at 10 replicas
+  # instead of freezing at whatever count it had.
+  fallback:
+    failureThreshold: 3
+    replicas: 10
+
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0          # react immediately to backlog
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100                         # can double every 15s...
+              periodSeconds: 15
+            - type: Pods
+              value: 10                          # ...or add 10 pods, whichever is more
+              periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 300        # wait 5 min of low load before shrinking
+          selectPolicy: Min
+          policies:
+            - type: Percent
+              value: 20                          # remove max 20% per minute (no flapping)
+              periodSeconds: 60
+
+  # KEDA uses the HIGHEST desired replica count across triggers.
+  # Replace both queries with the real metric names you see in groundcover's
+  # metric explorer. Test each with curl before applying (see README.md).
+  triggers:
+    # 1) Backlog size: ~20 undelivered messages per pod (tune to per-pod throughput)
+    - type: prometheus
+      name: backlog
+      authenticationRef:
+        name: groundcover-auth
+      metadata:
+        serverAddress: https://app.groundcover.com/api/prometheus
+        query: sum(pubsub_subscription_num_undelivered_messages{subscription="my-sub"})
+        threshold: "20"
+        activationThreshold: "0"
+        authModes: bearer
+        # customHeaders: X-Backend-Id=<ID>   # only if workspace has multiple backends
+
+    # 2) Latency guard: scale up when the oldest unacked message is older than
+    #    ~60s, even if the backlog count looks small (slow or stuck messages).
+    #    Delete this trigger if groundcover doesn't have an age metric.
+    - type: prometheus
+      name: oldest-age
+      authenticationRef:
+        name: groundcover-auth
+      metadata:
+        serverAddress: https://app.groundcover.com/api/prometheus
+        query: max(pubsub_subscription_oldest_unacked_message_age{subscription="my-sub"})
+        threshold: "60"
+        authModes: bearer
