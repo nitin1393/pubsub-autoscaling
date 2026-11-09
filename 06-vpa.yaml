@@ -1,21 +1,21 @@
 # VPA right-sizes worker pods. Safe alongside KEDA/HPA because KEDA scales on
-# queue metrics, not CPU/memory. Requires the VPA components installed in the
-# cluster (kubernetes/autoscaler project, not an EKS add-on).
+# queue metrics, not CPU/memory. Requires VPA installed (argocd/apps/vpa.yaml).
 #
-# Rollout: start with updateMode "Off" for ~1 week and read recommendations:
-#   kubectl describe vpa my-worker -n my-app
-# Then switch to "Initial" (or "InPlaceOrRecreate" on Kubernetes 1.35+).
-# Never use "Recreate" or "Auto" here: they evict pods during traffic spikes.
+# Rollout (docs/RUNBOOK.md):
+#   - Day 1: requests in 05-worker-deployment.yaml sized from groundcover history,
+#     minAllowed below = those requests (a floor: VPA can only grow pods at first).
+#   - Enable the vpa-gate (annotation below), dry run first.
+#   - After ~2 weeks: lower minAllowed so VPA can also shrink oversized pods.
+# Never use "Recreate" or "Auto": they evict pods during traffic spikes.
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
   name: my-worker
   namespace: my-app
   annotations:
-    # vpa-gate controller (07-vpa-gate.yaml) config. After the 1-week "Off"
-    # review, change "disabled" to "enabled" in Git; Argo CD syncs it and the
-    # controller starts switching modes (Initial while HPA scales,
-    # InPlaceOrRecreate once HPA has been stable for the window).
+    # vpa-gate controller (charts/vpa-gate). "enabled" = the controller switches
+    # updateMode: Initial while HPA scales, InPlaceOrRecreate once HPA has been
+    # stable for stable-seconds. Argo CD ignores updateMode so they don't fight.
     pubsub-autoscaling/vpa-gate: "disabled"
     pubsub-autoscaling/hpa-name: "keda-hpa-worker-scaler"   # KEDA names it keda-hpa-<ScaledObject>
     pubsub-autoscaling/stable-seconds: "900"
@@ -25,15 +25,19 @@ spec:
     kind: Deployment
     name: my-worker
   updatePolicy:
-    updateMode: "Off"            # -> "Initial" after review
+    updateMode: "Off"            # the vpa-gate takes over once enabled
   resourcePolicy:
     containerPolicies:
       - containerName: worker
         controlledResources: ["cpu", "memory"]
-        controlledValues: RequestsOnly
-        minAllowed:
-          cpu: 250m
-          memory: 256Mi
-        maxAllowed:
+        # RequestsAndLimits: VPA scales the limit with the request (keeping the
+        # Deployment's limit/request ratio), so a bigger recommendation actually
+        # prevents OOMs. With RequestsOnly the fixed memory limit would still kill
+        # the container no matter what VPA recommends.
+        controlledValues: RequestsAndLimits
+        minAllowed:              # FLOOR: set to the day-1 requests from groundcover history
+          cpu: 500m
+          memory: 512Mi
+        maxAllowed:              # CEILING: >= 2x the 30-day peaks; keeps pods small enough to scale out
           cpu: "2"
           memory: 4Gi

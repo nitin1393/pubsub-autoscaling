@@ -2,6 +2,10 @@
 
 Queue-driven autoscaling for Pub/Sub consumers, deployed with Argo CD.
 
+**Start here: [docs/RUNBOOK.md](docs/RUNBOOK.md)**, the best-practice rollout in
+7 phases, each with an exit check (prerequisites, sizing from groundcover
+history, proving metrics, staging, load test, enabling VPA, production, operating).
+
 ```
 Pub/Sub backlog -> groundcover -> KEDA/HPA -> pod count -> EKS Auto Mode adds nodes
                                    VPA      -> pod size  (gated by vpa-gate)
@@ -171,10 +175,10 @@ curl -sG 'https://app.groundcover.com/api/prometheus/api/v1/query' \
 ```
 
 ## Rollout of VPA
-1. Week 1: VPA `updateMode: Off`, gate `disabled`. Read recommendations:
-   `kubectl describe vpa my-worker -n my-app`
-2. Set worker requests near the recommendation; re-tune KEDA `threshold`.
-3. Enable the gate (Step 2 above), ideally with `gate.dryRun: true` for a day first.
+See [docs/RUNBOOK.md](docs/RUNBOOK.md), phases 1 and 5. In short: size requests
+from groundcover history, set them as the VPA floor (`minAllowed`), enable the
+gate in dry run, then live. VPA uses `RequestsAndLimits` so it can actually
+prevent OOMs. Lower the floor after about 2 weeks.
 
 KEDA and VPA don't conflict: KEDA scales pod count on queue metrics, VPA sets
 pod size from CPU/memory. Never add a CPU/memory trigger to KEDA.
