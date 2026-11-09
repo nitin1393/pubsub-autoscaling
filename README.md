@@ -46,7 +46,10 @@ GitHub Actions (`.github/workflows/vpa-gate.yaml`) runs gofmt, vet and tests on
 every change under `controller/`, and pushes a multi-arch image to
 `ghcr.io/nitin1393/vpa-gate`:
 - push to `main` -> tags `main` and `sha-<commit>`
-- git tag `vpa-gate-v0.1.0` -> tag `0.1.0` (what `07-vpa-gate.yaml` uses)
+- git tag `vpa-gate-v0.1.0` -> tag `0.1.0`
+
+`07-vpa-gate.yaml` pins an exact `sha-<commit>` build. To release a new version,
+bump that tag in Git and Argo CD rolls it out.
 
 Local: `cd controller && go test ./... && go build ./cmd`
 
