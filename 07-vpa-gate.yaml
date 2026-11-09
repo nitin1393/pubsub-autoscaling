@@ -1,14 +1,11 @@
-# VPA gate: lets VPA resize running pods ONLY after HPA has settled.
+# vpa-gate controller: lets VPA resize running pods only after HPA has settled.
 #
-#   HPA scaled in the last 15 min  -> VPA updateMode = Initial
-#       (new pods get the recommended size at creation; running pods untouched)
-#   HPA stable for 15 min          -> VPA updateMode = InPlaceOrRecreate
-#       (running pods are resized; in place on K8s 1.33+, otherwise recreated
-#        within the PodDisruptionBudget)
+#   HPA scaled in the last 15 min, or still scaling -> VPA updateMode = Initial
+#   HPA stable for 15 min                           -> VPA updateMode = InPlaceOrRecreate
 #
-# A CronJob checks every 5 minutes. It does nothing until you enable it on the VPA:
-#   kubectl annotate vpa my-worker -n my-app pubsub-autoscaling/vpa-gate=enabled --overwrite
-# Disable again with:  ...vpa-gate=disabled --overwrite   (mode is then left as-is)
+# It watches HPAs, so it switches to Initial within seconds of scaling, and
+# re-checks exactly when the 15-minute window ends. Source: controller/
+# Which VPAs it manages is set by annotations on each VPA (see 06-vpa.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,12 +18,18 @@ metadata:
   name: vpa-gate
   namespace: my-app
 rules:
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get"]
   - apiGroups: ["autoscaling.k8s.io"]
     resources: ["verticalpodautoscalers"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]          # leader election
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -42,97 +45,60 @@ roleRef:
   kind: Role
   name: vpa-gate
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: vpa-gate-script
-  namespace: my-app
-data:
-  gate.sh: |
-    #!/bin/sh
-    set -eu
-
-    NS="${NAMESPACE}"
-    HPA="${HPA_NAME}"
-    VPA="${VPA_NAME}"
-    STABLE="${STABLE_SECONDS:-900}"
-    SETTLED_MODE="${SETTLED_MODE:-InPlaceOrRecreate}"
-    SCALING_MODE="${SCALING_MODE:-Initial}"
-
-    gate=$(kubectl -n "$NS" get vpa "$VPA" \
-      -o go-template='{{with .metadata.annotations}}{{index . "pubsub-autoscaling/vpa-gate"}}{{end}}')
-    if [ "$gate" != "enabled" ]; then
-      echo "gate not enabled on vpa/$VPA (value='$gate'); nothing to do"
-      exit 0
-    fi
-
-    cur=$(kubectl -n "$NS" get hpa "$HPA" -o jsonpath='{.status.currentReplicas}')
-    des=$(kubectl -n "$NS" get hpa "$HPA" -o jsonpath='{.status.desiredReplicas}')
-    last=$(kubectl -n "$NS" get hpa "$HPA" -o jsonpath='{.status.lastScaleTime}')
-
-    now=$(date -u +%s)
-    if [ -z "$last" ]; then
-      age=999999   # never scaled -> treat as settled
-    else
-      # GNU date first, then busybox date (alpine)
-      ts=$(date -u -d "$last" +%s 2>/dev/null || date -u -D '%Y-%m-%dT%H:%M:%SZ' -d "$last" +%s)
-      age=$((now - ts))
-    fi
-
-    if [ "$cur" = "$des" ] && [ "$age" -ge "$STABLE" ]; then
-      want="$SETTLED_MODE"; why="settled: replicas=$cur, last scale ${age}s ago"
-    else
-      want="$SCALING_MODE"; why="scaling: current=$cur desired=$des, last scale ${age}s ago"
-    fi
-
-    have=$(kubectl -n "$NS" get vpa "$VPA" -o jsonpath='{.spec.updatePolicy.updateMode}')
-    if [ "$have" = "$want" ]; then
-      echo "vpa/$VPA already $have ($why)"
-    else
-      kubectl -n "$NS" patch vpa "$VPA" --type merge \
-        -p "{\"spec\":{\"updatePolicy\":{\"updateMode\":\"$want\"}}}"
-      echo "vpa/$VPA: $have -> $want ($why)"
-    fi
----
-apiVersion: batch/v1
-kind: CronJob
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: vpa-gate
   namespace: my-app
+  labels:
+    app: vpa-gate
 spec:
-  schedule: "*/5 * * * *"
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3
-  jobTemplate:
+  replicas: 1                     # leader election makes 2 safe if you want HA
+  selector:
+    matchLabels:
+      app: vpa-gate
+  template:
+    metadata:
+      labels:
+        app: vpa-gate
+      annotations:                # groundcover scrapes these metrics
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
-      backoffLimit: 0
-      activeDeadlineSeconds: 120
-      template:
-        spec:
-          serviceAccountName: vpa-gate
-          restartPolicy: Never
+      serviceAccountName: vpa-gate
+      # GHCR packages from a private repo are private: either make the
+      # vpa-gate package public, or create this pull secret (see README).
+      # imagePullSecrets:
+      #   - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vpa-gate
+          image: ghcr.io/nitin1393/vpa-gate:0.1.0
+          args:
+            - --watch-namespace=my-app
+            - --stable-window=15m
+            - --scaling-mode=Initial
+            - --settled-mode=InPlaceOrRecreate
+            - --leader-elect=true
+            - --dry-run=false
+          ports:
+            - { name: metrics, containerPort: 8080 }
+            - { name: probes, containerPort: 8081 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: probes }
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: probes }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 65534
-          containers:
-            - name: gate
-              image: alpine/kubectl:1.35.3      # pin to your cluster's minor version
-              command: ["sh", "/scripts/gate.sh"]
-              env:
-                - { name: NAMESPACE,      value: my-app }
-                - { name: HPA_NAME,       value: keda-hpa-worker-scaler }  # KEDA names it keda-hpa-<ScaledObject>
-                - { name: VPA_NAME,       value: my-worker }
-                - { name: STABLE_SECONDS, value: "900" }                   # 15 min without scaling
-                - { name: SETTLED_MODE,   value: InPlaceOrRecreate }
-                - { name: SCALING_MODE,   value: Initial }
-                - { name: HOME,           value: /tmp }                    # kubectl cache dir
-              resources:
-                requests: { cpu: 10m, memory: 32Mi }
-                limits:   { memory: 64Mi }
-              volumeMounts:
-                - { name: scripts, mountPath: /scripts }
-          volumes:
-            - name: scripts
-              configMap:
-                name: vpa-gate-script
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

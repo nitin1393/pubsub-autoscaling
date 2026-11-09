@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vpa
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"     # before the workload app (needs its CRDs)
+spec:
+  project: default
+  source:
+    repoURL: https://charts.fairwinds.com/stable
+    chart: vpa                              # Fairwinds chart for the upstream VPA
+    targetRevision: 5.2.0                   # VPA 1.7.1: InPlaceOrRecreate needs no feature gate,
+                                            # but needs Kubernetes 1.33+ (else pods are recreated)
+    helm:
+      valuesObject:
+        recommender:
+          enabled: true
+        updater:
+          enabled: true
+        admissionController:
+          enabled: true                     # required for "Initial" mode
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vpa
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

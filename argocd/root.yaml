@@ -1,0 +1,21 @@
+# App of apps. Apply this ONE file by hand; Argo CD then manages everything
+# in argocd/apps/ (KEDA, VPA, and this repo's manifests):
+#   kubectl apply -n argocd -f argocd/root.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pubsub-autoscaling-root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/nitin1393/pubsub-autoscaling.git
+    targetRevision: main
+    path: argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

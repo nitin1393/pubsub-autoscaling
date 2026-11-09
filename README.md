@@ -1,60 +1,101 @@
-# Pub/Sub worker autoscaling: EKS Auto Mode + KEDA + groundcover
+# Pub/Sub worker autoscaling: EKS Auto Mode + KEDA + VPA + groundcover
 
-Flow: Pub/Sub backlog -> groundcover -> KEDA -> more pods -> EKS Auto Mode adds nodes.
+Queue-driven autoscaling for Pub/Sub consumers, deployed with Argo CD.
 
-## 1. Install KEDA
-```bash
-helm repo add kedacore https://kedacore.github.io/charts
-helm repo update
-helm install keda kedacore/keda -n keda --create-namespace
+```
+Pub/Sub backlog -> groundcover -> KEDA/HPA -> pod count -> EKS Auto Mode adds nodes
+                                   VPA      -> pod size  (gated by vpa-gate)
 ```
 
-## 2. Find the metric names in groundcover and test them
-Search groundcover's metric explorer for your subscription's backlog
-(undelivered messages) and, if present, oldest-unacked-message age.
-Then test the exact query KEDA will run:
+| Piece | What it does | File |
+| --- | --- | --- |
+| KEDA ScaledObject | Pod **count** from queue backlog (via groundcover PromQL) | `01-keda-auth.yaml`, `02-scaledobject.yaml` |
+| Auto Mode NodePool | Nodes for the workers, Spot first | `03-nodepool.yaml` |
+| Placeholder pods | Spare capacity so new workers start instantly | `04-overprovisioning.yaml` |
+| Worker Deployment + PDB | The consumer itself | `05-worker-deployment.yaml` |
+| VPA | Pod **size** (CPU/memory requests) | `06-vpa.yaml` |
+| vpa-gate controller | Lets VPA resize running pods only after HPA settles | `07-vpa-gate.yaml`, `controller/` |
+| Argo CD apps | KEDA, VPA and this repo, as an app of apps | `argocd/` |
+
+## vpa-gate: resize only after HPA settles
+
+| HPA state | VPA mode | What happens |
+| --- | --- | --- |
+| Scaled in the last 15 minutes, or still scaling | `Initial` | New pods get the right size; running pods aren't touched |
+| No scaling for 15 minutes | `InPlaceOrRecreate` | Running pods are resized; on Kubernetes 1.33 or later without a restart |
+
+A small Go controller (controller-runtime) in `controller/`:
+- watches HPAs, so it switches to `Initial` within seconds of scaling
+- re-checks exactly when the stable window ends (no polling)
+- is configured per VPA with annotations, kept in Git:
+  ```yaml
+  pubsub-autoscaling/vpa-gate: "enabled"            # "disabled" = leave this VPA alone
+  pubsub-autoscaling/hpa-name: "keda-hpa-worker-scaler"
+  pubsub-autoscaling/stable-seconds: "900"
+  ```
+- records a Kubernetes Event on the VPA for every switch, logs JSON, and exposes
+  `vpa_gate_settled` and `vpa_gate_mode_switches_total` on `:8080/metrics`
+  (annotated for groundcover scraping)
+- supports `--dry-run=true` to log decisions without changing anything
+
+Argo CD is told to ignore the VPA's `updateMode` (`ignoreDifferences` +
+`RespectIgnoreDifferences`), otherwise self-heal would undo the controller.
+
+### Build
+GitHub Actions (`.github/workflows/vpa-gate.yaml`) runs gofmt, vet and tests on
+every change under `controller/`, and pushes a multi-arch image to
+`ghcr.io/nitin1393/vpa-gate`:
+- push to `main` -> tags `main` and `sha-<commit>`
+- git tag `vpa-gate-v0.1.0` -> tag `0.1.0` (what `07-vpa-gate.yaml` uses)
+
+Local: `cd controller && go test ./... && go build ./cmd`
+
+## Deploy with Argo CD
+
+1. **Repo access.** This repo is private: add it in Argo CD
+   (Settings -> Repositories) with a GitHub token or deploy key.
+2. **Image access.** GHCR packages from a private repo are private. Either make
+   the `vpa-gate` package public (GitHub -> Packages -> vpa-gate -> Settings), or:
+   ```bash
+   kubectl -n my-app create secret docker-registry ghcr-pull \
+     --docker-server=ghcr.io --docker-username=nitin1393 --docker-password=<PAT with read:packages>
+   ```
+   and uncomment `imagePullSecrets` in `07-vpa-gate.yaml`.
+3. **groundcover API key** (kept out of Git):
+   ```bash
+   kubectl create namespace my-app
+   kubectl -n my-app create secret generic groundcover-api-key \
+     --from-literal=bearerToken=<YOUR_GROUNDCOVER_API_KEY>
+   ```
+4. **Edit before syncing:** metric queries and `threshold` in `02-scaledobject.yaml`
+   (test them first, below), AZs in `03-nodepool.yaml`, image and requests in
+   `05-worker-deployment.yaml`.
+5. **Apply the root app once:**
+   ```bash
+   kubectl apply -n argocd -f argocd/root.yaml
+   ```
+   Argo CD installs KEDA and VPA (sync wave -1), then this repo (wave 0).
+
+### Test a groundcover query
 ```bash
-export GC_API_KEY=...
 curl -sG 'https://app.groundcover.com/api/prometheus/api/v1/query' \
   --data-urlencode 'query=sum(pubsub_subscription_num_undelivered_messages{subscription="my-sub"})' \
   -H "Authorization: Bearer $GC_API_KEY"
 ```
-You need a single number back. Put the working queries into `02-scaledobject.yaml`.
 
-## 3. Edit, then apply in order
-- `01-keda-auth.yaml`: groundcover API key
-- `02-scaledobject.yaml`: queries, `threshold` (messages per pod), min/max replicas
-- `03-nodepool.yaml`: your region's AZs
-- `04-overprovisioning.yaml`: size of the spare capacity
-- `05-worker-deployment.yaml`: image, resource requests, probes
-- `06-vpa.yaml`: VPA for pod right-sizing (needs VPA installed; starts in `Off` mode)
-
-- `07-vpa-gate.yaml`: CronJob that lets VPA resize running pods only after HPA has settled
-
-### VPA gate: resize only after HPA settles
-| HPA state | VPA mode | Effect |
-| --- | --- | --- |
-| Scaled in the last 15 min | `Initial` | New pods get the right size; running pods untouched |
-| Stable for 15 min | `InPlaceOrRecreate` | Running pods resized (in place on K8s 1.33+) |
-
-It is off until you enable it, after reviewing a week of `Off`-mode recommendations:
-```bash
-kubectl annotate vpa my-worker -n my-app pubsub-autoscaling/vpa-gate=enabled --overwrite
-kubectl get jobs -n my-app                 # find the latest vpa-gate-<id> job
-kubectl logs -n my-app job/vpa-gate-<id>   # shows "Initial -> InPlaceOrRecreate (settled: ...)"
-```
+## Rollout of VPA
+1. Week 1: VPA `updateMode: Off`, gate `disabled`. Read recommendations:
+   `kubectl describe vpa my-worker -n my-app`
+2. Set worker requests near the recommendation; re-tune KEDA `threshold`.
+3. In Git, set `pubsub-autoscaling/vpa-gate: "enabled"` in `06-vpa.yaml` and push.
+   Watch: `kubectl get events -n my-app --field-selector reason=UpdateModeChanged`
 
 KEDA and VPA don't conflict: KEDA scales pod count on queue metrics, VPA sets
 pod size from CPU/memory. Never add a CPU/memory trigger to KEDA.
 
+## Verify
 ```bash
-kubectl apply -f .
-```
-
-## 4. Verify
-```bash
-kubectl get scaledobject -n my-app       # READY=True, ACTIVE=True under load
-kubectl get hpa -n my-app                # KEDA-created HPA with current metric values
-kubectl get nodeclaims -w                # Auto Mode adding / removing nodes
-kubectl logs -n keda deploy/keda-operator | grep -i error
+kubectl get scaledobject,hpa,vpa -n my-app
+kubectl logs -n my-app deploy/vpa-gate
+kubectl get nodeclaims -w
 ```

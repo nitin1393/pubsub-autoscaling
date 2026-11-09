@@ -1,0 +1,38 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pubsub-autoscaling
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/nitin1393/pubsub-autoscaling.git   # private: add repo creds in Argo CD
+    targetRevision: main
+    path: .                                  # uses kustomization.yaml at the repo root
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: my-app
+  # The vpa-gate controller owns the VPA's updateMode at runtime. Without this,
+  # Argo CD would see drift from Git ("Off") and selfHeal would undo the
+  # controller every few minutes.
+  ignoreDifferences:
+    - group: autoscaling.k8s.io
+      kind: VerticalPodAutoscaler
+      jsonPointers:
+        - /spec/updatePolicy/updateMode
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true        # also skip updateMode when syncing
+      - SkipDryRunOnMissingResource=true     # first sync may race KEDA/VPA CRDs
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

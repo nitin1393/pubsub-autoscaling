@@ -12,10 +12,13 @@ metadata:
   name: my-worker
   namespace: my-app
   annotations:
-    # Set to "enabled" after the 1-week "Off" review to let 07-vpa-gate.yaml
-    # switch modes automatically (Initial while HPA scales, InPlaceOrRecreate
-    # once HPA has been stable for 15 min).
+    # vpa-gate controller (07-vpa-gate.yaml) config. After the 1-week "Off"
+    # review, change "disabled" to "enabled" in Git; Argo CD syncs it and the
+    # controller starts switching modes (Initial while HPA scales,
+    # InPlaceOrRecreate once HPA has been stable for the window).
     pubsub-autoscaling/vpa-gate: "disabled"
+    pubsub-autoscaling/hpa-name: "keda-hpa-worker-scaler"   # KEDA names it keda-hpa-<ScaledObject>
+    pubsub-autoscaling/stable-seconds: "900"
 spec:
   targetRef:
     apiVersion: apps/v1
