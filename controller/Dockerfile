@@ -1,11 +1,11 @@
-# Build
-FROM golang:1.24 AS build
+# Build natively on the runner's platform and cross-compile (no QEMU emulation)
+FROM --platform=$BUILDPLATFORM golang:1.24 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/vpa-gate ./cmd
 
