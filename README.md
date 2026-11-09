@@ -92,7 +92,7 @@ CI publishes the chart as an OCI artifact on every push to `main`:
 ```bash
 helm registry login ghcr.io -u nitin1393      # only while the package is private
 helm upgrade --install vpa-gate oci://ghcr.io/nitin1393/charts/vpa-gate \
-  --version 0.1.0 -n my-app --set watchNamespace=my-app
+  --version 0.1.1 -n my-app --set watchNamespace=my-app
 ```
 
 ### Step 2: turn the gate on for your VPA
