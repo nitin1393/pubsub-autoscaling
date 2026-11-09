@@ -29,6 +29,21 @@ You need a single number back. Put the working queries into `02-scaledobject.yam
 - `05-worker-deployment.yaml`: image, resource requests, probes
 - `06-vpa.yaml`: VPA for pod right-sizing (needs VPA installed; starts in `Off` mode)
 
+- `07-vpa-gate.yaml`: CronJob that lets VPA resize running pods only after HPA has settled
+
+### VPA gate: resize only after HPA settles
+| HPA state | VPA mode | Effect |
+| --- | --- | --- |
+| Scaled in the last 15 min | `Initial` | New pods get the right size; running pods untouched |
+| Stable for 15 min | `InPlaceOrRecreate` | Running pods resized (in place on K8s 1.33+) |
+
+It is off until you enable it, after reviewing a week of `Off`-mode recommendations:
+```bash
+kubectl annotate vpa my-worker -n my-app pubsub-autoscaling/vpa-gate=enabled --overwrite
+kubectl get jobs -n my-app                 # find the latest vpa-gate-<id> job
+kubectl logs -n my-app job/vpa-gate-<id>   # shows "Initial -> InPlaceOrRecreate (settled: ...)"
+```
+
 KEDA and VPA don't conflict: KEDA scales pod count on queue metrics, VPA sets
 pod size from CPU/memory. Never add a CPU/memory trigger to KEDA.
 

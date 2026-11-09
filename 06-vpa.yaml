@@ -11,6 +11,11 @@ kind: VerticalPodAutoscaler
 metadata:
   name: my-worker
   namespace: my-app
+  annotations:
+    # Set to "enabled" after the 1-week "Off" review to let 07-vpa-gate.yaml
+    # switch modes automatically (Initial while HPA scales, InPlaceOrRecreate
+    # once HPA has been stable for 15 min).
+    pubsub-autoscaling/vpa-gate: "disabled"
 spec:
   targetRef:
     apiVersion: apps/v1
