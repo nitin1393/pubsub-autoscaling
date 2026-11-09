@@ -1,0 +1,80 @@
+# -- Container image. The tag defaults to the chart's appVersion.
+image:
+  repository: ghcr.io/nitin1393/vpa-gate
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets, e.g. [{name: ghcr-pull}] while the GHCR package is private.
+imagePullSecrets: []
+
+# -- 1 is enough; leader election makes 2 safe for HA.
+replicaCount: 1
+
+# -- Namespace whose VPAs/HPAs the controller manages.
+# "" = the release namespace. Ignored when watchAllNamespaces is true.
+watchNamespace: ""
+
+# -- Manage gated VPAs in every namespace (uses a ClusterRole instead of a Role).
+watchAllNamespaces: false
+
+gate:
+  # -- Default time the HPA must be unchanged before VPA may resize running
+  # pods. Each VPA can override it with pubsub-autoscaling/stable-seconds.
+  stableWindow: 15m
+  # -- VPA updateMode while the HPA is scaling or scaled recently.
+  scalingMode: Initial
+  # -- VPA updateMode once the HPA has settled.
+  settledMode: InPlaceOrRecreate
+  # -- Log decisions without patching VPAs.
+  dryRun: false
+  # -- Full resync safety net (normally HPA events drive reconciles).
+  resyncPeriod: 10m
+
+leaderElection:
+  enabled: true
+
+logging:
+  # -- zap log level: debug, info, error
+  level: info
+
+metrics:
+  port: 8080
+  # -- Annotate pods with prometheus.io/* so groundcover's sensor scrapes them.
+  podAnnotations: true
+  serviceMonitor:
+    # -- Create a ServiceMonitor for kube-prometheus-stack / Prometheus Operator.
+    enabled: false
+    interval: 30s
+    # -- Extra labels, e.g. {release: kube-prometheus-stack} to match your Prometheus.
+    labels: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

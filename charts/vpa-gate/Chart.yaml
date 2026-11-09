@@ -1,0 +1,12 @@
+apiVersion: v2
+name: vpa-gate
+description: >-
+  Lets VPA resize running pods only after the HPA has settled: Initial while
+  the HPA is scaling, InPlaceOrRecreate once it has been stable for a window.
+type: application
+version: 0.1.0
+appVersion: "sha-fe10325"
+home: https://github.com/nitin1393/pubsub-autoscaling
+sources:
+  - https://github.com/nitin1393/pubsub-autoscaling/tree/main/controller
+keywords: [vpa, hpa, keda, autoscaling, controller]

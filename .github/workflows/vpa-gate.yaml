@@ -3,10 +3,10 @@ name: vpa-gate
 on:
   push:
     branches: [main]
-    paths: ["controller/**", ".github/workflows/vpa-gate.yaml"]
+    paths: ["controller/**", "charts/**", ".github/workflows/vpa-gate.yaml"]
     tags: ["vpa-gate-v*"]
   pull_request:
-    paths: ["controller/**", ".github/workflows/vpa-gate.yaml"]
+    paths: ["controller/**", "charts/**", ".github/workflows/vpa-gate.yaml"]
 
 permissions:
   contents: read
@@ -14,6 +14,7 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/vpa-gate
+  CHART_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
 
 jobs:
   test:
@@ -32,13 +33,26 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -race -count=1
 
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint
+        run: helm lint charts/vpa-gate --strict
+      - name: helm template (default, own namespace + ServiceMonitor, all namespaces)
+        run: |
+          helm template t charts/vpa-gate -n my-app > /dev/null
+          helm template t charts/vpa-gate -n vpa-gate --set watchNamespace=my-app \
+            --set metrics.serviceMonitor.enabled=true > /dev/null
+          helm template t charts/vpa-gate -n vpa-gate --set watchAllNamespaces=true > /dev/null
+
   image:
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -62,3 +76,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  chart-publish:
+    needs: chart
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Push chart to GHCR (version from Chart.yaml)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package charts/vpa-gate -d /tmp/chart
+          helm push /tmp/chart/vpa-gate-*.tgz "$CHART_REPO"

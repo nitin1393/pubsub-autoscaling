@@ -22,6 +22,7 @@ import (
 func main() {
 	var (
 		metricsAddr, probeAddr, watchNS string
+		leaderNS                        string
 		scalingMode, settledMode        string
 		stable, resync                  time.Duration
 		leaderElect, dryRun             bool
@@ -36,6 +37,8 @@ func main() {
 	flag.StringVar(&scalingMode, "scaling-mode", gate.DefaultModes.Scaling, "VPA updateMode while the HPA is scaling.")
 	flag.StringVar(&settledMode, "settled-mode", gate.DefaultModes.Settled, "VPA updateMode once the HPA has settled.")
 	flag.BoolVar(&leaderElect, "leader-elect", true, "Enable leader election (safe to run 2 replicas).")
+	flag.StringVar(&leaderNS, "leader-election-namespace", os.Getenv("POD_NAMESPACE"),
+		"Namespace for the leader-election lease (default: POD_NAMESPACE, else the watched namespace).")
 	flag.BoolVar(&dryRun, "dry-run", false, "Log decisions without patching VPAs.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -59,7 +62,7 @@ func main() {
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          leaderElect,
 		LeaderElectionID:        "vpa-gate.pubsub-autoscaling",
-		LeaderElectionNamespace: watchNS,
+		LeaderElectionNamespace: leaderNamespace(leaderNS, watchNS),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
@@ -86,4 +89,14 @@ func main() {
 		setupLog.Error(err, "manager exited")
 		os.Exit(1)
 	}
+}
+
+// leaderNamespace picks where the leader-election lease lives: the explicit
+// flag/POD_NAMESPACE if set, else the watched namespace. Empty lets
+// controller-runtime use the pod's own namespace.
+func leaderNamespace(explicit, watched string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return watched
 }

@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vpa-gate
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/nitin1393/pubsub-autoscaling.git   # private: add repo creds in Argo CD
+    targetRevision: main
+    path: charts/vpa-gate
+    helm:
+      releaseName: vpa-gate
+      valuesObject:
+        watchNamespace: my-app          # namespace of the worker's HPA and VPA
+        gate:
+          stableWindow: 15m
+          dryRun: false                 # set true for a first look at its decisions
+        # imagePullSecrets:             # while the GHCR package is private
+        #   - name: ghcr-pull
+        # metrics:
+        #   serviceMonitor:             # if using in-cluster Prometheus (Grafana option)
+        #     enabled: true
+        #     labels: {release: kube-prometheus-stack}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: my-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

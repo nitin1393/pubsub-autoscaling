@@ -1,0 +1,12 @@
+vpa-gate {{ .Chart.AppVersion }} is installed in {{ .Release.Namespace }}.
+Watching: {{ if .Values.watchAllNamespaces }}all namespaces{{ else }}{{ include "vpa-gate.watchNamespace" . }}{{ end }}{{ if .Values.gate.dryRun }} (DRY RUN: decisions are logged, VPAs are not changed){{ end }}
+
+It only manages VPAs that carry these annotations:
+
+  pubsub-autoscaling/vpa-gate: "enabled"
+  pubsub-autoscaling/hpa-name: "<hpa name, e.g. keda-hpa-worker-scaler>"
+  pubsub-autoscaling/stable-seconds: "900"      # optional
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "vpa-gate.fullname" . }}
+  kubectl get events -A --field-selector reason=UpdateModeChanged
