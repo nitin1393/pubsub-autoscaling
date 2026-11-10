@@ -5,7 +5,7 @@ description: >-
   the HPA is scaling, InPlaceOrRecreate once it has been stable for a window.
 type: application
 version: 0.1.2
-appVersion: "sha-950257e"
+appVersion: "sha-8978b33"
 home: https://github.com/nitin1393/pubsub-autoscaling
 sources:
   - https://github.com/nitin1393/pubsub-autoscaling/tree/main/controller
