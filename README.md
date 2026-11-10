@@ -2,6 +2,8 @@
 
 Queue-driven autoscaling for Pub/Sub consumers, deployed with Argo CD.
 
+**Design: [docs/DESIGN.md](docs/DESIGN.md)**: how HPA, VPA and the vpa-gate work
+together, scaling cases, settings reference.
 **Start here: [docs/RUNBOOK.md](docs/RUNBOOK.md)**, the best-practice rollout in
 7 phases, each with an exit check (prerequisites, sizing from groundcover
 history, proving metrics, staging, load test, enabling VPA, production, operating).
