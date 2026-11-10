@@ -4,7 +4,7 @@ description: >-
   Lets VPA resize running pods only after the HPA has settled: Initial while
   the HPA is scaling, InPlaceOrRecreate once it has been stable for a window.
 type: application
-version: 0.1.1
+version: 0.1.2
 appVersion: "sha-950257e"
 home: https://github.com/nitin1393/pubsub-autoscaling
 sources:

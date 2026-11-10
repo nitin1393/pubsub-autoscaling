@@ -3,10 +3,10 @@ name: vpa-gate
 on:
   push:
     branches: [main]
-    paths: ["controller/**", "charts/**", ".github/workflows/vpa-gate.yaml"]
+    paths: ["controller/**", "charts/**", "loadtest/**", ".github/workflows/vpa-gate.yaml"]
     tags: ["vpa-gate-v*"]
   pull_request:
-    paths: ["controller/**", "charts/**", ".github/workflows/vpa-gate.yaml"]
+    paths: ["controller/**", "charts/**", "loadtest/**", ".github/workflows/vpa-gate.yaml"]
 
 permissions:
   contents: read
@@ -31,7 +31,36 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet ./...
-      - run: go test ./... -race -count=1
+      - name: unit tests + 3 simulated traffic days (race detector)
+        run: go test ./... -race -short -count=1
+
+  stress:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: controller/go.mod
+          cache-dependency-path: controller/go.sum
+      - name: 20 simulated 8-hour traffic days, flapping, 200 parallel VPAs
+        run: go test ./internal/controller -run TestStress -count=1 -v | grep -E "^(=== RUN|--- |ok|FAIL)|switches"
+      - name: fuzz the decision logic
+        run: go test ./internal/gate -run '^$' -fuzz FuzzDecide -fuzztime 60s
+      - name: benchmarks (smoke)
+        run: go test ./internal/controller -run '^$' -bench . -benchmem -benchtime 200x
+
+  loadtest-kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest -q loadtest
 
   chart:
     runs-on: ubuntu-latest
@@ -48,7 +77,7 @@ jobs:
           helm template t charts/vpa-gate -n vpa-gate --set watchAllNamespaces=true > /dev/null
 
   image:
-    needs: test
+    needs: [test, stress]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:

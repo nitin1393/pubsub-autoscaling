@@ -5,6 +5,8 @@ Queue-driven autoscaling for Pub/Sub consumers, deployed with Argo CD.
 **Start here: [docs/RUNBOOK.md](docs/RUNBOOK.md)**, the best-practice rollout in
 7 phases, each with an exit check (prerequisites, sizing from groundcover
 history, proving metrics, staging, load test, enabling VPA, production, operating).
+**Stress testing: [loadtest/README.md](loadtest/README.md)**: controller stress tests
+in CI, and a Pub/Sub load generator with a watcher that checks the pass criteria.
 
 ```
 Pub/Sub backlog -> groundcover -> KEDA/HPA -> pod count -> EKS Auto Mode adds nodes

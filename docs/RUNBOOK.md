@@ -106,7 +106,9 @@ pods bigger until it has learned.
 
 ## Phase 4: load test (staging)
 
-Publish a burst (e.g. 10x normal peak for 15 minutes), then stop.
+Use the load-test kit in [`loadtest/`](../loadtest/README.md): run `watch.py`, then the
+`spike` profile (10x normal peak for 15 minutes). Then `flapping`, `sawtooth` and
+`sustained`; `soak` overnight. `watch.py` prints PASS/FAIL for the cluster-side checks.
 
 | Pass criterion | How to check |
 | --- | --- |

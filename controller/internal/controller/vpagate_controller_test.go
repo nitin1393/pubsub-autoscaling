@@ -59,6 +59,7 @@ func setup(t *testing.T, objs ...client.Object) (*Reconciler, client.Client, *re
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
+		WithIndex(newVPA(), hpaNameIndex, indexHPAName).
 		WithStatusSubresource(&autoscalingv2.HorizontalPodAutoscaler{}).Build()
 	// fake builder drops status when a status subresource is declared; set it explicitly
 	for _, o := range objs {

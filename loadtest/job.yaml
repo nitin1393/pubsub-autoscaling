@@ -1,0 +1,49 @@
+# Pub/Sub load generator Job. Not part of the Argo CD apps: run it on demand.
+#   kubectl -n loadtest create secret generic pubsub-loadtest-sa --from-file=key.json=<sa-key.json>
+#   kubectl apply -k loadtest/
+# Change PROFILE / BASE_RATE below (or with kustomize patches) per run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pubsub-loadtest
+  namespace: loadtest
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: pubsub-loadtest
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: publisher
+          image: python:3.12-slim
+          command: ["sh", "-c"]
+          args:
+            - pip install --quiet --no-cache-dir --target /tmp/deps google-cloud-pubsub==2.43.0
+              && PYTHONPATH=/tmp/deps python /app/publisher.py
+          env:
+            - { name: PROJECT_ID, value: "MY_PROJECT" }
+            - { name: TOPIC_ID, value: "my-topic" }        # the topic feeding the worker's subscription
+            - { name: PROFILE, value: "spike" }            # spike | sustained | sawtooth | flapping | soak
+            - { name: BASE_RATE, value: "20" }             # msgs/s at 1x; set to your normal peak rate
+            - { name: PAYLOAD_BYTES, value: "1024" }
+            - { name: GOOGLE_APPLICATION_CREDENTIALS, value: /secrets/key.json }
+            - { name: HOME, value: /tmp }
+          resources:
+            requests: { cpu: 500m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+            - { name: sa, mountPath: /secrets, readOnly: true }
+      volumes:
+        - name: app
+          configMap:
+            name: pubsub-loadtest
+        - name: sa
+          secret:
+            secretName: pubsub-loadtest-sa

@@ -42,6 +42,17 @@ var (
 
 func init() { metrics.Registry.MustRegister(settledGauge, switchesTotal) }
 
+// hpaNameIndex indexes VPAs by the HPA they reference, so an HPA event maps
+// to its VPAs with one index lookup instead of scanning every VPA.
+const hpaNameIndex = "pubsub-autoscaling.hpaName"
+
+func indexHPAName(obj client.Object) []string {
+	if name := obj.GetAnnotations()[gate.AnnHPA]; name != "" {
+		return []string{name}
+	}
+	return nil
+}
+
 // Reconciler sets each gated VPA's updateMode from its HPA's activity.
 type Reconciler struct {
 	client.Client
@@ -122,7 +133,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 func (r *Reconciler) vpasForHPA(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(VPAGVK.GroupVersion().WithKind(VPAGVK.Kind + "List"))
-	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{hpaNameIndex: obj.GetName()}); err != nil {
 		log.FromContext(ctx).Error(err, "listing vpas for hpa", "hpa", obj.GetName())
 		return nil
 	}
@@ -139,6 +151,9 @@ func (r *Reconciler) vpasForHPA(ctx context.Context, obj client.Object) []reconc
 // SetupWithManager registers the controller: reconcile on VPA changes and
 // on any change to an HPA that a gated VPA references.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), newVPA(), hpaNameIndex, indexHPAName); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("vpa-gate").
 		For(newVPA()).
