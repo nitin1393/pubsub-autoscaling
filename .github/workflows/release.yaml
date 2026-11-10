@@ -1,0 +1,77 @@
+name: release
+
+# A release is a chart version bump: when the vpa-gate workflow (tests, stress,
+# image, chart publish) succeeds on main and charts/vpa-gate/Chart.yaml has a
+# version with no tag yet, tag that commit vpa-gate-v<version> and publish a
+# GitHub release with the packaged chart attached.
+on:
+  workflow_run:
+    workflows: [vpa-gate]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Read chart version
+        id: v
+        run: |
+          version=$(awk '/^version:/ {print $2}' charts/vpa-gate/Chart.yaml)
+          app=$(awk -F'"' '/^appVersion:/ {print $2}' charts/vpa-gate/Chart.yaml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "tag=vpa-gate-v$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/vpa-gate-v$version" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag vpa-gate-v$version already exists: nothing to release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: azure/setup-helm@v4
+        if: steps.v.outputs.exists == 'false'
+
+      - name: Tag and publish release
+        if: steps.v.outputs.exists == 'false'
+        run: |
+          helm package charts/vpa-gate -d dist
+          cat > notes.md <<EOF
+          ## vpa-gate ${{ steps.v.outputs.version }}
+
+          | | |
+          | --- | --- |
+          | Helm chart | \`oci://ghcr.io/${{ github.repository_owner }}/charts/vpa-gate --version ${{ steps.v.outputs.version }}\` |
+          | Image | \`ghcr.io/${{ github.repository_owner }}/vpa-gate:${{ steps.v.outputs.app }}\` |
+          | Commit | ${SHA} |
+
+          Tests, 20-day traffic simulation, fuzzing and chart lint passed in
+          [this run](${{ github.event.workflow_run.html_url }}).
+
+          Install:
+          \`\`\`bash
+          helm upgrade --install vpa-gate oci://ghcr.io/${{ github.repository_owner }}/charts/vpa-gate \\
+            --version ${{ steps.v.outputs.version }} -n my-app --set watchNamespace=my-app
+          \`\`\`
+          EOF
+          gh release create "${{ steps.v.outputs.tag }}" dist/vpa-gate-*.tgz \
+            --target "$SHA" \
+            --title "vpa-gate ${{ steps.v.outputs.version }}" \
+            --notes-file notes.md \
+            --generate-notes

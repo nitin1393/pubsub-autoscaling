@@ -98,7 +98,7 @@ CI publishes the chart as an OCI artifact on every push to `main`:
 ```bash
 helm registry login ghcr.io -u nitin1393      # only while the package is private
 helm upgrade --install vpa-gate oci://ghcr.io/nitin1393/charts/vpa-gate \
-  --version 0.1.2 -n my-app --set watchNamespace=my-app
+  --version 0.2.0 -n my-app --set watchNamespace=my-app
 ```
 
 ### Step 2: turn the gate on for your VPA
@@ -144,7 +144,9 @@ GitHub Actions (`.github/workflows/vpa-gate.yaml`) on changes to `controller/` o
 - Chart: `oci://ghcr.io/nitin1393/charts/vpa-gate:<Chart.yaml version>`
 
 To release: set `appVersion` in `charts/vpa-gate/Chart.yaml` to the new
-`sha-<commit>` image tag, bump `version`, push. Argo CD rolls it out.
+`sha-<commit>` image tag, bump `version`, push to `main`. When CI passes, the
+`release` workflow tags the commit `vpa-gate-v<version>` and publishes a GitHub
+release with the chart attached (no manual tagging). Argo CD rolls it out.
 
 Local: `cd controller && go test ./... && go build ./cmd`
 
