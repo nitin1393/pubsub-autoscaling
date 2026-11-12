@@ -1,3 +1,6 @@
 /controller/vpa-gate
 /controller/bin/
 *.test
+__pycache__/
+*.pyc
+.pytest_cache/
