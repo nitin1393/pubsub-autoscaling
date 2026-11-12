@@ -1,0 +1,11 @@
+metricsSource: groundcover
+groundcover:
+  backendId: my-backend
+triggers:
+  inFlight:
+    enabled: true
+nodePool:
+  enabled: true
+  zones: [ap-south-1a, ap-south-1b, ap-south-1c]
+headroom:
+  enabled: true

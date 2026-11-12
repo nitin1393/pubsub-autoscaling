@@ -1,0 +1,52 @@
+{{- if .Values.nodePool.enabled }}
+{{- $np := .Values.nodePool }}
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ $np.name }}
+  labels:
+    {{- include "pubsub-hpa.labels" . | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        workload: pubsub-worker
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      {{- if $np.taint }}
+      taints:
+        - key: workload
+          value: pubsub-worker
+          effect: NoSchedule
+      {{- end }}
+      expireAfter: {{ $np.expireAfter }}
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: {{ toJson $np.capacityTypes }}
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: {{ toJson $np.instanceCategories }}
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: [{{ $np.instanceGenerationGreaterThan | quote }}]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: {{ toJson $np.instanceCpu }}
+        {{- with $np.zones }}
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: {{ toJson . }}
+        {{- end }}
+  limits:
+    cpu: {{ $np.limits.cpu | quote }}
+    memory: {{ $np.limits.memory }}
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: {{ $np.consolidateAfter }}
+    budgets:
+      - nodes: {{ $np.disruptionBudget | quote }}
+{{- end }}

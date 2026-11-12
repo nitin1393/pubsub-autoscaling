@@ -1,0 +1,6 @@
+gcpPubsub:
+  subscription: projects/demo-project/subscriptions/demo-sub
+triggers:
+  inFlight:
+    enabled: true
+    source: groundcover

@@ -35,7 +35,8 @@ kubectl -n loadtest create secret generic pubsub-loadtest-sa --from-file=key.jso
 Edit `job.yaml`: `PROJECT_ID`, `TOPIC_ID`, and `BASE_RATE` = your normal peak messages/s.
 
 ### 2. Run a profile
-In one terminal, start the watcher (needs `kubectl` read access to the worker namespace):
+In one terminal, start the watcher (needs `kubectl` read access to the worker namespace).
+Testing HPA only, before VPA is installed? Add `VPA=none` (gate checks are skipped):
 ```bash
 cd loadtest
 DURATION=2700 python3 watch.py        # 45 min: spike profile (40 min) + drain

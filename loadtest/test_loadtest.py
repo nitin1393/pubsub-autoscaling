@@ -22,8 +22,8 @@ def series(spec):
     return out
 
 
-def results(samples):
-    return {n: (ok, d) for n, ok, d in check(samples, STABLE, STEP, 180, 60, 4)}
+def results(samples, vpa=True):
+    return {n: (ok, d) for n, ok, d in check(samples, STABLE, STEP, 180, 60, 4, vpa=vpa)}
 
 
 def good_spike():
@@ -99,3 +99,19 @@ def test_profiles_are_sane(name):
 def test_unknown_profile_rejected():
     with pytest.raises(SystemExit):
         plan("nope", 1)
+
+
+def test_hpa_only_mode_skips_gate_checks():
+    s = good_spike()
+    for x in s:
+        x.vpa_mode = "n/a"
+    r = results(s, vpa=False)
+    assert not any(n.startswith("gate-") for n in r)
+    assert set(r) == {"no-oom", "no-long-pending", "scale-up-latency", "hpa-caught-up"}
+    assert all(ok for ok, _ in r.values()), r
+
+
+def test_hpa_not_caught_up_fails():
+    s = good_spike()
+    s[-1].hpa_desired = 9
+    assert results(s, vpa=False)["hpa-caught-up"][0] is False

@@ -1,0 +1,2 @@
+gcpPubsub:
+  subscription: projects/demo-project/subscriptions/demo-sub

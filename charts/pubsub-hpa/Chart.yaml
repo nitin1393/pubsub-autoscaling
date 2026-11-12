@@ -1,0 +1,11 @@
+apiVersion: v2
+name: pubsub-hpa
+description: >-
+  Queue-driven horizontal autoscaling for a Pub/Sub worker with KEDA: scales
+  the worker Deployment on subscription backlog, oldest-message age and
+  (optionally) in-flight messages. Optional EKS Auto Mode NodePool and
+  placeholder pods for instant headroom. Requires KEDA installed.
+type: application
+version: 0.1.0
+home: https://github.com/nitin1393/pubsub-autoscaling
+keywords: [keda, hpa, pubsub, autoscaling, eks]

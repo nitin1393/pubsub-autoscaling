@@ -21,7 +21,10 @@ Usage:
   python3 watch.py                      # until Ctrl-C
   DURATION=2700 python3 watch.py        # 45 minutes (spike profile + drain)
 
-Environment: NAMESPACE (my-app), HPA (keda-hpa-worker-scaler), VPA (my-worker),
+HPA-only test (no VPA installed yet): VPA=none. The gate checks are then
+skipped and only the HPA/pod/node checks are reported.
+
+Environment: NAMESPACE (my-app), HPA (keda-hpa-worker-scaler), VPA (my-worker, or none),
 WORKER_LABEL (app=my-worker), INTERVAL (15), STABLE_SECONDS (900),
 PENDING_LIMIT (180), SCALEUP_LIMIT (60), MAX_SWITCHES_PER_HOUR (4), OUT (samples.csv)
 """
@@ -56,12 +59,23 @@ class Sample:
 
 # ----------------------------------------------------------------- checks --
 def check(samples: list[Sample], stable_s: float, interval_s: float, pending_limit: float,
-          scaleup_limit: float, max_switches_per_hour: float) -> list[tuple[str, bool, str]]:
-    """Pure function: evaluate the criteria on a list of samples."""
+          scaleup_limit: float, max_switches_per_hour: float,
+          vpa: bool = True) -> list[tuple[str, bool, str]]:
+    """Pure function: evaluate the criteria on a list of samples.
+    vpa=False (HPA-only test) skips the gate checks."""
     out: list[tuple[str, bool, str]] = []
     if not samples:
         return [("samples", False, "no samples collected")]
 
+    if vpa:
+        out += gate_checks(samples, stable_s, interval_s, max_switches_per_hour)
+    out += hpa_checks(samples, pending_limit, scaleup_limit)
+    return out
+
+
+def gate_checks(samples: list[Sample], stable_s: float, interval_s: float,
+                max_switches_per_hour: float) -> list[tuple[str, bool, str]]:
+    out: list[tuple[str, bool, str]] = []
     # gate-safety / gate-settles
     unsafe, unsettled = [], []
     for s in samples:
@@ -77,6 +91,17 @@ def check(samples: list[Sample], stable_s: float, interval_s: float, pending_lim
     out.append(("gate-settles", not unsettled,
                 f"{len(unsettled)} samples quiet >= window but VPA not {SETTLED}" if unsettled else "VPA released after every quiet window"))
 
+    # gate-no-flap
+    switches = sum(1 for a, b in zip(samples, samples[1:]) if a.vpa_mode != b.vpa_mode)
+    hours = max((samples[-1].t - samples[0].t) / 3600, 1 / 60)
+    rate = switches / hours
+    out.append(("gate-no-flap", rate <= max_switches_per_hour or switches <= 2,
+                f"{switches} mode switches in {hours:.2f} h ({rate:.1f}/h, limit {max_switches_per_hour:.0f}/h)"))
+    return out
+
+
+def hpa_checks(samples: list[Sample], pending_limit: float, scaleup_limit: float) -> list[tuple[str, bool, str]]:
+    out: list[tuple[str, bool, str]] = []
     # no-oom
     ooms = samples[-1].oom_kills - samples[0].oom_kills
     out.append(("no-oom", ooms == 0, f"{ooms} OOMKilled worker restarts during the run"))
@@ -99,12 +124,10 @@ def check(samples: list[Sample], stable_s: float, interval_s: float, pending_lim
     out.append(("scale-up-latency", not slow,
                 f"{len(slow)} scale-ups slower than {scaleup_limit:.0f}s" if slow else f"every scale-up showed new ready pods within {scaleup_limit:.0f}s"))
 
-    # gate-no-flap
-    switches = sum(1 for a, b in zip(samples, samples[1:]) if a.vpa_mode != b.vpa_mode)
-    hours = max((samples[-1].t - samples[0].t) / 3600, 1 / 60)
-    rate = switches / hours
-    out.append(("gate-no-flap", rate <= max_switches_per_hour or switches <= 2,
-                f"{switches} mode switches in {hours:.2f} h ({rate:.1f}/h, limit {max_switches_per_hour:.0f}/h)"))
+    # hpa-reached-desired: by the end, current caught up with desired
+    last = samples[-1]
+    out.append(("hpa-caught-up", last.hpa_current == last.hpa_desired,
+                f"final HPA current={last.hpa_current} desired={last.hpa_desired}; peak desired={max(s.hpa_desired for s in samples)}"))
     return out
 
 
@@ -125,7 +148,7 @@ def ts(s: str | None) -> float:
 def sample(ns: str, hpa: str, vpa: str, label: str) -> Sample:
     now = time.time()
     h = kubectl_json("-n", ns, "get", "hpa", hpa)
-    v = kubectl_json("-n", ns, "get", "vpa", vpa)
+    v = kubectl_json("-n", ns, "get", "vpa", vpa) if vpa else {}
     pods = kubectl_json("-n", ns, "get", "pods", "-l", label)["items"]
     nodes = kubectl_json("get", "nodes")["items"]
     hs = h.get("status", {})
@@ -148,7 +171,7 @@ def sample(ns: str, hpa: str, vpa: str, label: str) -> Sample:
         hpa_current=int(hs.get("currentReplicas", 0)),
         hpa_desired=int(hs.get("desiredReplicas", 0)),
         hpa_last_scale=ts(hs.get("lastScaleTime")),
-        vpa_mode=v.get("spec", {}).get("updatePolicy", {}).get("updateMode", ""),
+        vpa_mode=v.get("spec", {}).get("updatePolicy", {}).get("updateMode", "") if vpa else "n/a",
         pods_ready=ready, pods_pending=pending, oldest_pending_s=oldest,
         oom_kills=ooms, nodes=len(nodes),
     )
@@ -157,6 +180,8 @@ def sample(ns: str, hpa: str, vpa: str, label: str) -> Sample:
 def main() -> None:
     env = os.environ.get
     ns, hpa, vpa = env("NAMESPACE", "my-app"), env("HPA", "keda-hpa-worker-scaler"), env("VPA", "my-worker")
+    if vpa.lower() in ("", "none", "off"):
+        vpa = ""  # HPA-only test
     label = env("WORKER_LABEL", "app=my-worker")
     interval = float(env("INTERVAL", "15"))
     duration = float(env("DURATION", "0"))
@@ -186,7 +211,8 @@ def main() -> None:
             pass
 
     results = check(samples, stable, interval, float(env("PENDING_LIMIT", "180")),
-                    float(env("SCALEUP_LIMIT", "60")), float(env("MAX_SWITCHES_PER_HOUR", "4")))
+                    float(env("SCALEUP_LIMIT", "60")), float(env("MAX_SWITCHES_PER_HOUR", "4")),
+                    vpa=bool(vpa))
     print("\n=== cluster-side results ===")
     for name, ok, detail in results:
         print(f"{'PASS' if ok else 'FAIL'}  {name:18s} {detail}")

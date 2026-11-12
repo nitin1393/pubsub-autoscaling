@@ -1,0 +1,112 @@
+# -- The worker Deployment to scale (must already exist, in the release namespace).
+target:
+  name: my-worker
+  kind: Deployment
+
+# -- ScaledObject name. KEDA names the HPA "keda-hpa-<this>"; the VPA gate's
+# pubsub-autoscaling/hpa-name annotation must match (default: keda-hpa-worker-scaler).
+scaledObjectName: worker-scaler
+
+replicas:
+  min: 2          # never 0 in production: no cold start
+  max: 25         # start low; raise to 100 after a clean week (runbook phase 6)
+
+pollingInterval: 15   # seconds between metric checks
+cooldownPeriod: 300   # only used for scale-to-zero (ignored while min > 0)
+
+# -- If every trigger fails this many polls in a row, hold this many replicas.
+fallback:
+  enabled: true
+  failureThreshold: 3
+  replicas: 10
+
+# -- HPA behaviour: fast up, slow down.
+behavior:
+  scaleUp:
+    stabilizationWindowSeconds: 0
+    percent: 100          # can double...
+    pods: 10              # ...or add 10 pods, whichever is more
+    periodSeconds: 15
+  scaleDown:
+    stabilizationWindowSeconds: 300
+    percent: 20           # remove at most 20%...
+    periodSeconds: 60     # ...per minute
+
+# -- Where KEDA reads the queue metrics from:
+#   gcpPubsub   KEDA queries Google Cloud Monitoring directly (quickest to test;
+#               needs a GCP service account key with roles/monitoring.viewer)
+#   groundcover groundcover's Prometheus API (needs the stackdriver-exporter
+#               feeding groundcover, and a groundcover API key)
+#   prometheus  any Prometheus-compatible API, e.g. in-cluster Prometheus
+metricsSource: gcpPubsub
+
+gcpPubsub:
+  # Full resource name of the worker's subscription.
+  subscription: projects/MY_PROJECT/subscriptions/my-sub
+  # Secret (create it yourself, not in Git) holding the service account key JSON.
+  existingSecret: pubsub-scaler-gcp
+  secretKey: GOOGLE_APPLICATION_CREDENTIALS_JSON
+
+groundcover:
+  serverAddress: https://app.groundcover.com/api/prometheus
+  existingSecret: groundcover-api-key   # key "bearerToken"
+  secretKey: bearerToken
+  backendId: ""                         # only if the workspace has multiple backends
+
+prometheus:
+  serverAddress: http://prometheus-operated.monitoring.svc:9090
+  # Optional bearer auth (e.g. Grafana Cloud uses basic auth: set authModes
+  # and the secret below accordingly).
+  authModes: ""                         # "", bearer or basic
+  existingSecret: ""
+  secretKeys:
+    bearerToken: bearerToken
+    username: username
+    password: password
+
+triggers:
+  # Pods = undelivered messages / target.
+  backlog:
+    enabled: true
+    target: 20
+    activation: 0
+    # PromQL used with metricsSource groundcover/prometheus (ignored for gcpPubsub).
+    query: sum(pubsub_subscription_num_undelivered_messages{subscription="my-sub"})
+  # Pods = oldest unacked message age (s) / target. Deliberately weak.
+  oldestAge:
+    enabled: true
+    targetSeconds: 60
+    query: max(pubsub_subscription_oldest_unacked_message_age{subscription="my-sub"})
+  # Pods = messages being processed now / target. Needs the worker to export an
+  # in-flight gauge; always read through a Prometheus-compatible API.
+  inFlight:
+    enabled: false
+    target: 16                 # 80% of the worker's flow-control limit (20)
+    source: groundcover        # groundcover or prometheus
+    query: sum(pubsub_worker_inflight_messages{namespace="my-app"})
+
+# -- Optional: dedicated EKS Auto Mode NodePool for the workers.
+nodePool:
+  enabled: false
+  name: pubsub-workers
+  taint: true                 # workers then need the matching toleration
+  capacityTypes: [spot, on-demand]
+  instanceCategories: [c, m, r]
+  instanceGenerationGreaterThan: "5"
+  instanceCpu: ["2", "4", "8", "16"]
+  zones: []                   # e.g. [ap-south-1a, ap-south-1b, ap-south-1c]; empty = any
+  limits:
+    cpu: "400"
+    memory: 1600Gi
+  consolidateAfter: 2m
+  disruptionBudget: "10%"
+  expireAfter: 336h
+
+# -- Optional: low-priority placeholder pods that hold spare room so new
+# workers start instantly. Workers must use priorityClassName "pubsub-worker".
+headroom:
+  enabled: false
+  replicas: 2
+  cpu: "2"
+  memory: 4Gi
+  image: registry.k8s.io/pause:3.10

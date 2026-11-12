@@ -2,6 +2,8 @@
 
 Queue-driven autoscaling for Pub/Sub consumers, deployed with Argo CD.
 
+**HPA first: [charts/pubsub-hpa](charts/pubsub-hpa/README.md)**: a Helm chart for
+just the KEDA/HPA part, with step-by-step install and an HPA-only load test.
 **Design: [docs/DESIGN.md](docs/DESIGN.md)**: how HPA, VPA and the vpa-gate work
 together, scaling cases, settings reference.
 **Start here: [docs/RUNBOOK.md](docs/RUNBOOK.md)**, the best-practice rollout in

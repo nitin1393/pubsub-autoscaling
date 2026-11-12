@@ -1,0 +1,78 @@
+{{- include "pubsub-hpa.validate" . -}}
+{{- $src := .Values.metricsSource -}}
+{{- $t := .Values.triggers -}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Values.scaledObjectName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubsub-hpa.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    kind: {{ .Values.target.kind }}
+    name: {{ .Values.target.name }}
+  minReplicaCount: {{ .Values.replicas.min }}
+  maxReplicaCount: {{ .Values.replicas.max }}
+  pollingInterval: {{ .Values.pollingInterval }}
+  cooldownPeriod: {{ .Values.cooldownPeriod }}
+  {{- if .Values.fallback.enabled }}
+  fallback:
+    failureThreshold: {{ .Values.fallback.failureThreshold }}
+    replicas: {{ .Values.fallback.replicas }}
+  {{- end }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: {{ .Values.behavior.scaleUp.stabilizationWindowSeconds }}
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: {{ .Values.behavior.scaleUp.percent }}
+              periodSeconds: {{ .Values.behavior.scaleUp.periodSeconds }}
+            - type: Pods
+              value: {{ .Values.behavior.scaleUp.pods }}
+              periodSeconds: {{ .Values.behavior.scaleUp.periodSeconds }}
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.behavior.scaleDown.stabilizationWindowSeconds }}
+          selectPolicy: Min
+          policies:
+            - type: Percent
+              value: {{ .Values.behavior.scaleDown.percent }}
+              periodSeconds: {{ .Values.behavior.scaleDown.periodSeconds }}
+  # KEDA uses the HIGHEST replica count asked for by any trigger.
+  triggers:
+  {{- if eq $src "gcpPubsub" }}
+    {{- if $t.backlog.enabled }}
+    - type: gcp-pubsub
+      name: backlog
+      authenticationRef:
+        name: {{ include "pubsub-hpa.authName" (dict "Values" .Values "source" "gcpPubsub") }}
+      metadata:
+        subscriptionName: {{ .Values.gcpPubsub.subscription | quote }}
+        mode: SubscriptionSize
+        value: {{ $t.backlog.target | toString | quote }}
+        activationValue: {{ $t.backlog.activation | toString | quote }}
+    {{- end }}
+    {{- if $t.oldestAge.enabled }}
+    - type: gcp-pubsub
+      name: oldest-age
+      authenticationRef:
+        name: {{ include "pubsub-hpa.authName" (dict "Values" .Values "source" "gcpPubsub") }}
+      metadata:
+        subscriptionName: {{ .Values.gcpPubsub.subscription | quote }}
+        mode: OldestUnackedMessageAge
+        value: {{ $t.oldestAge.targetSeconds | toString | quote }}
+    {{- end }}
+  {{- else }}
+    {{- if $t.backlog.enabled }}
+    {{- include "pubsub-hpa.promTrigger" (dict "root" . "name" "backlog" "query" $t.backlog.query "threshold" $t.backlog.target "activation" $t.backlog.activation "source" $src) | nindent 4 }}
+    {{- end }}
+    {{- if $t.oldestAge.enabled }}
+    {{- include "pubsub-hpa.promTrigger" (dict "root" . "name" "oldest-age" "query" $t.oldestAge.query "threshold" $t.oldestAge.targetSeconds "activation" "" "source" $src) | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- if $t.inFlight.enabled }}
+    {{- include "pubsub-hpa.promTrigger" (dict "root" . "name" "in-flight" "query" $t.inFlight.query "threshold" $t.inFlight.target "activation" "" "source" $t.inFlight.source) | nindent 4 }}
+  {{- end }}

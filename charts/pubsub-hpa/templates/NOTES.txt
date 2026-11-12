@@ -1,0 +1,29 @@
+pubsub-hpa installed: KEDA scales {{ .Values.target.kind }}/{{ .Values.target.name }} in {{ .Release.Namespace }}
+between {{ .Values.replicas.min }} and {{ .Values.replicas.max }} pods, reading metrics from: {{ .Values.metricsSource }}.
+
+KEDA creates the HPA "keda-hpa-{{ .Values.scaledObjectName }}".
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} get scaledobject {{ .Values.scaledObjectName }}   # READY=True
+  kubectl -n {{ .Release.Namespace }} get hpa keda-hpa-{{ .Values.scaledObjectName }}  # TARGETS show numbers, not <unknown>
+  kubectl -n {{ .Release.Namespace }} describe scaledobject {{ .Values.scaledObjectName }}
+  kubectl -n keda logs deploy/keda-operator | grep -i error
+
+{{- if eq .Values.metricsSource "gcpPubsub" }}
+
+Needs Secret {{ .Values.gcpPubsub.existingSecret }} (key {{ .Values.gcpPubsub.secretKey }}) with a GCP
+service account key that has roles/monitoring.viewer.
+{{- else if eq .Values.metricsSource "groundcover" }}
+
+Needs Secret {{ .Values.groundcover.existingSecret }} (key {{ .Values.groundcover.secretKey }}) with a groundcover API key.
+{{- end }}
+{{- if .Values.headroom.enabled }}
+
+Headroom is on: give the worker  priorityClassName: pubsub-worker  so it can preempt the placeholders.
+{{- end }}
+{{- if and .Values.nodePool.enabled .Values.nodePool.taint }}
+
+NodePool {{ .Values.nodePool.name }} is tainted: the worker needs
+  nodeSelector: {workload: pubsub-worker}
+  tolerations: [{key: workload, value: pubsub-worker, effect: NoSchedule}]
+{{- end }}

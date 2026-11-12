@@ -1,0 +1,5 @@
+metricsSource: prometheus
+triggers:
+  inFlight:
+    enabled: true
+    source: prometheus

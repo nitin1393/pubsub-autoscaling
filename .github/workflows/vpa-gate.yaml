@@ -67,14 +67,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - name: helm lint
-        run: helm lint charts/vpa-gate --strict
-      - name: helm template (default, own namespace + ServiceMonitor, all namespaces)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: vpa-gate chart - lint + render 3 configurations
         run: |
+          helm lint charts/vpa-gate --strict
           helm template t charts/vpa-gate -n my-app > /dev/null
           helm template t charts/vpa-gate -n vpa-gate --set watchNamespace=my-app \
             --set metrics.serviceMonitor.enabled=true > /dev/null
           helm template t charts/vpa-gate -n vpa-gate --set watchAllNamespaces=true > /dev/null
+      - name: pubsub-hpa chart - lint every CI value set
+        run: |
+          for f in charts/pubsub-hpa/ci/*.yaml; do
+            echo "== $f"; helm lint charts/pubsub-hpa --strict -f "$f"
+          done
+      - name: pubsub-hpa chart - render tests
+        run: |
+          pip install pytest pyyaml
+          python -m pytest -q charts/pubsub-hpa/tests
 
   image:
     needs: [test, stress]
@@ -113,8 +124,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - name: Push chart to GHCR (version from Chart.yaml)
+      - name: Push every chart to GHCR (version from each Chart.yaml)
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm package charts/vpa-gate -d /tmp/chart
-          helm push /tmp/chart/vpa-gate-*.tgz "$CHART_REPO"
+          for c in charts/*/; do
+            helm package "$c" -d /tmp/chart
+          done
+          for t in /tmp/chart/*.tgz; do
+            echo "== pushing $t"; helm push "$t" "$CHART_REPO"
+          done

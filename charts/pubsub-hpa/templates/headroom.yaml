@@ -1,0 +1,67 @@
+{{- if .Values.headroom.enabled }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: pubsub-overprovisioning
+  labels:
+    {{- include "pubsub-hpa.labels" . | nindent 4 }}
+value: -10
+globalDefault: false
+preemptionPolicy: Never
+description: "Placeholder pods that real workers preempt"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: pubsub-worker
+  labels:
+    {{- include "pubsub-hpa.labels" . | nindent 4 }}
+value: 1000
+globalDefault: false
+description: "Pub/Sub workers (set priorityClassName: pubsub-worker on the worker)"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.scaledObjectName }}-headroom
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubsub-hpa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.headroom.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.scaledObjectName }}-headroom
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.scaledObjectName }}-headroom
+    spec:
+      priorityClassName: pubsub-overprovisioning
+      terminationGracePeriodSeconds: 0
+      {{- if .Values.nodePool.enabled }}
+      nodeSelector:
+        workload: pubsub-worker
+      {{- if .Values.nodePool.taint }}
+      tolerations:
+        - key: workload
+          value: pubsub-worker
+          effect: NoSchedule
+      {{- end }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65535
+      containers:
+        - name: pause
+          image: {{ .Values.headroom.image }}
+          resources:
+            requests:
+              cpu: {{ .Values.headroom.cpu | quote }}
+              memory: {{ .Values.headroom.memory }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

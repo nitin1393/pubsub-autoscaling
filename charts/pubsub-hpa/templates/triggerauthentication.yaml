@@ -1,0 +1,63 @@
+{{- $src := .Values.metricsSource -}}
+{{- $sources := list $src -}}
+{{- if and .Values.triggers.inFlight.enabled (ne .Values.triggers.inFlight.source $src) -}}
+{{- $sources = append $sources .Values.triggers.inFlight.source -}}
+{{- end -}}
+{{- range $s := $sources }}
+{{- if not (include "pubsub-hpa.needsAuth" (dict "Values" $.Values "source" $s)) }}
+{{- /* no auth needed for this source (e.g. in-cluster Prometheus) */ -}}
+{{- else if eq $s "gcpPubsub" }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "pubsub-hpa.authName" (dict "Values" $.Values "source" $s) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "pubsub-hpa.labels" $ | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: GoogleApplicationCredentials
+      name: {{ $.Values.gcpPubsub.existingSecret }}
+      key: {{ $.Values.gcpPubsub.secretKey }}
+{{- else if eq $s "groundcover" }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "pubsub-hpa.authName" (dict "Values" $.Values "source" $s) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "pubsub-hpa.labels" $ | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: bearerToken
+      name: {{ $.Values.groundcover.existingSecret }}
+      key: {{ $.Values.groundcover.secretKey }}
+{{- else if eq $s "prometheus" }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "pubsub-hpa.authName" (dict "Values" $.Values "source" $s) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "pubsub-hpa.labels" $ | nindent 4 }}
+spec:
+  {{- $p := $.Values.prometheus }}
+  {{- if and $p.existingSecret (eq $p.authModes "bearer") }}
+  secretTargetRef:
+    - parameter: bearerToken
+      name: {{ $p.existingSecret }}
+      key: {{ $p.secretKeys.bearerToken }}
+  {{- else if and $p.existingSecret (eq $p.authModes "basic") }}
+  secretTargetRef:
+    - parameter: username
+      name: {{ $p.existingSecret }}
+      key: {{ $p.secretKeys.username }}
+    - parameter: password
+      name: {{ $p.existingSecret }}
+      key: {{ $p.secretKeys.password }}
+  {{- end }}
+{{- end }}
+{{- end }}
