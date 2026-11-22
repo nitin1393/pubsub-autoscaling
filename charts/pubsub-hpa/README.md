@@ -67,7 +67,7 @@ helm upgrade --install pubsub-hpa charts/pubsub-hpa -n my-app -f my-hpa-values.y
 Or from GHCR without cloning:
 ```bash
 helm upgrade --install pubsub-hpa oci://ghcr.io/nitin1393/charts/pubsub-hpa \
-  --version 0.1.0 -n my-app -f my-hpa-values.yaml
+  --version 0.2.0 -n my-app -f my-hpa-values.yaml
 ```
 
 ### 5. Check it works
@@ -117,12 +117,38 @@ and nothing is lost.
 | `triggers.backlog` | on, 20 per pod, activation 0 | Pods = undelivered / 20 |
 | `triggers.oldestAge` | on, 60 s | Pods = oldest age / 60 s |
 | `triggers.inFlight` | off, 16 per pod, source `groundcover` | Needs the worker's in-flight metric |
-| `nodePool.*` | off | Auto Mode NodePool (Spot first, 3 AZs, 400 vCPU cap) |
+| `nodePool.enabled` | off | Dedicated worker NodePool (Spot first, 3 AZs, 400 vCPU cap) |
+| `nodePool.provisioner` | `autoMode` | `autoMode` (built-in NodeClass, Auto Mode fee per node) or `karpenter` (self-managed, `EC2NodeClass`) |
+| `nodePool.karpenter.nodeClassName` | `pubsub-workers` | Existing `EC2NodeClass` to use |
+| `nodePool.karpenter.createEC2NodeClass` | false | Let the chart create it from `ec2NodeClass.*` (role, AMI alias, discovery tag, gp3 disk, IMDSv2) |
 | `headroom.*` | off; 2 x (2 CPU / 4Gi) | Placeholder pods |
 
 The chart refuses bad settings with a clear message (placeholder subscription,
 unknown source, max < min, no trigger enabled).
 
+## EKS Auto Mode or self-managed Karpenter
+
+Both use the same NodePool API; the chart switches the node class and the
+instance-label prefix (`eks.amazonaws.com/...` vs `karpenter.k8s.aws/...`).
+Everything else (KEDA, HPA, VPA, vpa-gate, headroom) is identical.
+
+| | `provisioner: autoMode` | `provisioner: karpenter` |
+| --- | --- | --- |
+| Node class | Built-in `NodeClass/default` | `EC2NodeClass` (existing, or created by the chart) |
+| Cost | EC2 price + Auto Mode fee per managed node | EC2 price only |
+| You run | Nothing | Karpenter controller + its IAM role + SQS interruption queue (for Spot warnings) |
+
+```yaml
+nodePool:
+  enabled: true
+  provisioner: karpenter
+  karpenter:
+    createEC2NodeClass: true
+    ec2NodeClass:
+      role: KarpenterNodeRole-<cluster>
+      discoveryTag: <cluster>        # subnets/SGs tagged karpenter.sh/discovery=<cluster>
+```
+
 ## Tests
-`helm lint` on every `ci/*.yaml` value set and 14 render tests run in CI:
+`helm lint` on every `ci/*.yaml` value set and 19 render tests run in CI:
 `HELM=helm python3 -m pytest charts/pubsub-hpa/tests`

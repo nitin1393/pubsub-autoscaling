@@ -141,3 +141,42 @@ def test_nodepool_and_headroom_optional():
 ])
 def test_bad_config_fails_clearly(args, msg):
     assert msg in render(*args, ok=False)
+
+
+def test_auto_mode_nodepool_uses_eks_labels_and_builtin_class():
+    np = one(render(*GCP, "--set", "nodePool.enabled=true"), "NodePool")["spec"]["template"]["spec"]
+    assert np["nodeClassRef"] == {"group": "eks.amazonaws.com", "kind": "NodeClass", "name": "default"}
+    keys = {r["key"] for r in np["requirements"]}
+    assert "eks.amazonaws.com/instance-category" in keys
+    assert not any(k.startswith("karpenter.k8s.aws/") for k in keys)
+
+
+def test_karpenter_nodepool_uses_ec2nodeclass_and_karpenter_labels():
+    docs = render(*GCP, "--set", "nodePool.enabled=true", "--set", "nodePool.provisioner=karpenter")
+    np = one(docs, "NodePool")["spec"]["template"]["spec"]
+    assert np["nodeClassRef"] == {"group": "karpenter.k8s.aws", "kind": "EC2NodeClass", "name": "pubsub-workers"}
+    keys = {r["key"] for r in np["requirements"]}
+    assert {"karpenter.k8s.aws/instance-category", "karpenter.k8s.aws/instance-cpu"} <= keys
+    assert not any(k.startswith("eks.amazonaws.com/") for k in keys)
+    assert not [d for d in docs if d["kind"] == "EC2NodeClass"]  # existing class by default
+
+
+def test_karpenter_can_create_ec2nodeclass():
+    docs = render(*GCP, "--set", "nodePool.enabled=true", "--set", "nodePool.provisioner=karpenter",
+                  "--set", "nodePool.karpenter.createEC2NodeClass=true",
+                  "--set", "nodePool.karpenter.ec2NodeClass.role=KarpenterNodeRole-prod",
+                  "--set", "nodePool.karpenter.ec2NodeClass.discoveryTag=prod")
+    nc = one(docs, "EC2NodeClass")["spec"]
+    assert nc["role"] == "KarpenterNodeRole-prod"
+    assert nc["subnetSelectorTerms"] == [{"tags": {"karpenter.sh/discovery": "prod"}}]
+    assert nc["metadataOptions"]["httpTokens"] == "required"
+    assert nc["blockDeviceMappings"][0]["ebs"]["encrypted"] is True
+
+
+@pytest.mark.parametrize("args,msg", [
+    (GCP + ["--set", "nodePool.enabled=true", "--set", "nodePool.provisioner=gke"], "nodePool.provisioner must be"),
+    (GCP + ["--set", "nodePool.enabled=true", "--set", "nodePool.provisioner=karpenter",
+            "--set", "nodePool.karpenter.createEC2NodeClass=true"], "set nodePool.karpenter.ec2NodeClass.role"),
+])
+def test_bad_nodepool_config_fails_clearly(args, msg):
+    assert msg in render(*args, ok=False)

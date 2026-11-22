@@ -24,6 +24,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not (or .Values.triggers.backlog.enabled .Values.triggers.oldestAge.enabled .Values.triggers.inFlight.enabled) -}}
 {{- fail "enable at least one trigger" -}}
 {{- end -}}
+{{- $np := .Values.nodePool -}}
+{{- if and $np.enabled (not (has $np.provisioner (list "autoMode" "karpenter"))) -}}
+{{- fail (printf "nodePool.provisioner must be autoMode or karpenter (got %q)" $np.provisioner) -}}
+{{- end -}}
+{{- if and $np.enabled (eq $np.provisioner "karpenter") $np.karpenter.createEC2NodeClass (or (contains "my-cluster" $np.karpenter.ec2NodeClass.role) (eq $np.karpenter.ec2NodeClass.discoveryTag "my-cluster")) -}}
+{{- fail "set nodePool.karpenter.ec2NodeClass.role and discoveryTag for your cluster (or point nodeClassName at an existing EC2NodeClass)" -}}
+{{- end -}}
 {{- if and .Values.triggers.inFlight.enabled (not (has .Values.triggers.inFlight.source (list "groundcover" "prometheus"))) -}}
 {{- fail "triggers.inFlight.source must be groundcover or prometheus" -}}
 {{- end -}}

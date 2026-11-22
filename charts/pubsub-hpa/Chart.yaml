@@ -6,6 +6,6 @@ description: >-
   (optionally) in-flight messages. Optional EKS Auto Mode NodePool and
   placeholder pods for instant headroom. Requires KEDA installed.
 type: application
-version: 0.1.0
+version: 0.2.0
 home: https://github.com/nitin1393/pubsub-autoscaling
 keywords: [keda, hpa, pubsub, autoscaling, eks]

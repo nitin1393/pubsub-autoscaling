@@ -1,11 +1,17 @@
 {{- if .Values.nodePool.enabled }}
 {{- $np := .Values.nodePool }}
+{{- $auto := eq $np.provisioner "autoMode" }}
+{{- /* Auto Mode and self-managed Karpenter share the NodePool API; only the
+       node class and the instance label prefix differ. */}}
+{{- $prefix := ternary "eks.amazonaws.com" "karpenter.k8s.aws" $auto }}
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata:
   name: {{ $np.name }}
   labels:
     {{- include "pubsub-hpa.labels" . | nindent 4 }}
+  annotations:
+    pubsub-autoscaling/provisioner: {{ $np.provisioner }}
 spec:
   template:
     metadata:
@@ -13,9 +19,15 @@ spec:
         workload: pubsub-worker
     spec:
       nodeClassRef:
+        {{- if $auto }}
         group: eks.amazonaws.com
         kind: NodeClass
         name: default
+        {{- else }}
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ $np.karpenter.nodeClassName }}
+        {{- end }}
       {{- if $np.taint }}
       taints:
         - key: workload
@@ -27,13 +39,13 @@ spec:
         - key: karpenter.sh/capacity-type
           operator: In
           values: {{ toJson $np.capacityTypes }}
-        - key: eks.amazonaws.com/instance-category
+        - key: {{ $prefix }}/instance-category
           operator: In
           values: {{ toJson $np.instanceCategories }}
-        - key: eks.amazonaws.com/instance-generation
+        - key: {{ $prefix }}/instance-generation
           operator: Gt
           values: [{{ $np.instanceGenerationGreaterThan | quote }}]
-        - key: eks.amazonaws.com/instance-cpu
+        - key: {{ $prefix }}/instance-cpu
           operator: In
           values: {{ toJson $np.instanceCpu }}
         {{- with $np.zones }}

@@ -1,0 +1,13 @@
+gcpPubsub:
+  subscription: projects/demo-project/subscriptions/demo-sub
+nodePool:
+  enabled: true
+  provisioner: karpenter
+  zones: [ap-south-1a, ap-south-1b, ap-south-1c]
+  karpenter:
+    createEC2NodeClass: true
+    ec2NodeClass:
+      role: KarpenterNodeRole-demo
+      discoveryTag: demo
+headroom:
+  enabled: true

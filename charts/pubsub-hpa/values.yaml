@@ -85,9 +85,13 @@ triggers:
     source: groundcover        # groundcover or prometheus
     query: sum(pubsub_worker_inflight_messages{namespace="my-app"})
 
-# -- Optional: dedicated EKS Auto Mode NodePool for the workers.
+# -- Optional: dedicated NodePool for the workers. Same NodePool API for both
+# provisioners; only the node class and instance label prefix differ.
 nodePool:
   enabled: false
+  # autoMode  EKS Auto Mode (built-in NodeClass "default"; per-node Auto Mode fee)
+  # karpenter self-managed Karpenter (EC2NodeClass; no Auto Mode fee, you run Karpenter)
+  provisioner: autoMode
   name: pubsub-workers
   taint: true                 # workers then need the matching toleration
   capacityTypes: [spot, on-demand]
@@ -101,6 +105,21 @@ nodePool:
   consolidateAfter: 2m
   disruptionBudget: "10%"
   expireAfter: 336h
+  # Only for provisioner: karpenter
+  karpenter:
+    # EC2NodeClass the NodePool uses. Point at an existing one, or let the chart
+    # create it (createEC2NodeClass: true) from the settings below.
+    nodeClassName: pubsub-workers
+    createEC2NodeClass: false
+    ec2NodeClass:
+      role: KarpenterNodeRole-my-cluster          # IAM role for the nodes (not the controller)
+      amiAlias: al2023@latest                     # or bottlerocket@latest; pin a version in production
+      discoveryTag: my-cluster                    # subnets / security groups tagged karpenter.sh/discovery=<this>
+      blockDevice:
+        size: 50Gi
+        type: gp3
+        encrypted: true
+      metadataHttpTokens: required                # IMDSv2 only
 
 # -- Optional: low-priority placeholder pods that hold spare room so new
 # workers start instantly. Workers must use priorityClassName "pubsub-worker".
